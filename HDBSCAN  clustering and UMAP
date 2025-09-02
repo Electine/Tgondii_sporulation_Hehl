@@ -1,0 +1,289 @@
+setwd("S:/CELL/Elec/Analysis")
+
+# Load necessary libraries
+library(umap)
+library(dbscan)  # HDBSCAN is available in this library
+library(ggplot2)
+library(dplyr)
+library(openxlsx)
+
+# Step 1: Load the dataset
+full_data <- read.csv("S:/CELL/Elec/Analysis/Masterlist-RNA-0-removed.csv")
+
+# Assign gene IDs as row names
+rownames(full_data) <- full_data[,1]
+
+# Create a subset for analysis by removing the first two columns (assuming they are GeneID and Description)
+expression_data <- full_data[,-c(1,2)]
+
+# Now, rownames(expression_data) should contain your gene IDs
+
+# Step 2: Calculate variances for each gene
+variances <- apply(expression_data, 1, var)
+
+# Add the Variance column to full_data
+full_data$Variance <- variances
+
+# Plot histogram of variances
+variance_plot <- ggplot(data.frame(Variance = variances), aes(x = Variance)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  labs(title = "Histogram of Gene Variances", x = "Variance", y = "Frequency") +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.line = element_line(size = 1, colour = "black"),
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 20),
+    panel.grid.major = element_line(size = 0.5),
+    panel.grid.minor = element_blank(),
+    axis.ticks = element_line(size = 1)
+  )
+
+# Save the variance plot
+ggsave("S:/CELL/Elec/Analysis/variance_histogram.png", plot=variance_plot, width=10, height=8)
+# Display the variance plot
+print(variance_plot)
+
+# Calculate mean and standard deviation of variances
+mean_variance <- mean(variances, na.rm = TRUE)
+sd_variance <- sd(variances, na.rm = TRUE)
+
+# Option a: Use mean as the threshold
+var_threshold <- mean_variance
+
+print(paste("Variance threshold set at (mean -1):", var_threshold))
+
+# Filter genes based on the new threshold
+filtered_indices <- which(variances > var_threshold)
+
+# Get indices of genes that were filtered out
+filtered_out_indices <- which(variances <= var_threshold)
+
+# Subset the expression data
+filtered_data <- expression_data[filtered_indices, ]
+filtered_out_data <- expression_data[filtered_out_indices, ]
+
+# Store original filtered data for final output
+original_filtered_data <- filtered_data
+
+# Also subset the Variance column
+filtered_variances <- variances[filtered_indices]
+filtered_out_variances <- variances[filtered_out_indices]
+
+# Prepare the final data by combining identifiers, filtered data, and variance
+identifiers_filtered <- full_data[filtered_indices, 1:2]
+final_data_filtered <- cbind(identifiers_filtered, filtered_data, Variance = filtered_variances)
+
+identifiers_filtered_out <- full_data[filtered_out_indices, 1:2]
+final_data_filtered_out <- cbind(identifiers_filtered_out, filtered_out_data, Variance = filtered_out_variances)
+
+# Optionally, save to Excel
+write.xlsx(final_data_filtered, file = "S:/CELL/Elec/Analysis/Processed_Masterlist-RNA_with_Variance_mean.xlsx")
+print("Filtered data with variance has been written to Excel.")
+
+write.xlsx(final_data_filtered_out, file = "S:/CELL/Elec/Analysis/Filtered_Out_Genes_with_Variance_mean.xlsx")
+print("Filtered out genes with variance have been written to Excel.")
+
+# Step 3: Scale the data by genes (rows)
+
+# Transpose the data so that genes are in columns and samples are in rows
+numeric_data_transposed <- t(filtered_data)
+
+# Scale the data (scaling is now performed on genes)
+scaled_data_transposed <- scale(numeric_data_transposed)
+
+# Transpose back to original orientation (genes in rows, samples in columns)
+scaled_data <- t(scaled_data_transposed)
+
+# Convert to data frame and restore row names
+scaled_data_df <- as.data.frame(scaled_data)
+rownames(scaled_data_df) <- rownames(filtered_data)
+
+# Reattach the first two columns (identifiers) and Variance
+final_scaled_data <- cbind(identifiers_filtered, scaled_data_df, Variance = filtered_variances)
+
+# Save the scaled data to Excel
+write.xlsx(final_scaled_data, file = "S:/CELL/Elec/Analysis/Processed_Masterlist-RNA_scaled_with_Variance_mean.xlsx")
+print("Filtered and scaled data with variance has been written to Excel.")
+
+# Step 4: UMAP Reduction
+# Exclude identifiers and Variance column for UMAP
+umap_input <- scaled_data_df  # Only the scaled numeric data
+
+# Ensure all data in umap_input is numeric
+str(umap_input)  # Should show all columns as numeric
+
+umap_result <- umap(umap_input, n_neighbors=30, min_dist=0.03, n_components=2)
+save(umap_result, file= "S:/CELL/Elec/Analysis/umap_result.RData")
+
+# Step 5: HDBSCAN Clustering
+hdbscan_result <- hdbscan(umap_result$layout, minPts = 40)  # Adjust `minPts` as needed
+save(hdbscan_result, file= "S:/CELL/Elec/Analysis/HDBSCAN_result.RData")
+
+# Plotting UMAP results with HDBSCAN cluster assignments
+umap_plot <- data.frame(
+  UMAP1 = umap_result$layout[,1],
+  UMAP2 = umap_result$layout[,2],
+  Cluster = factor(hdbscan_result$cluster)
+) %>%
+  ggplot(aes(x=UMAP1, y=UMAP2, color=Cluster)) +
+  geom_point(alpha=0.5) +
+  labs(
+    title="UMAP Reduction with HDBSCAN Clusters",
+    color="Cluster",
+    x = "UMAP 1",
+    y = "UMAP 2"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 28),
+    axis.title = element_text(size = 20),
+    axis.line = element_line(size = 1.5, colour = "black"),
+    axis.text = element_text(size = 20),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+# Save the UMAP plot
+ggsave("S:/CELL/Elec/Analysis/umap_plot_with_hdbscan_clusters.png", plot=umap_plot, width=10, height=8)
+# Display the UMAP plot
+print(umap_plot)
+
+# Combine cluster assignments with the original data
+final_data_with_clusters <- cbind(
+  identifiers_filtered,
+  original_filtered_data,
+  Variance = filtered_variances,
+  Cluster = factor(hdbscan_result$cluster)
+)
+
+# Save the final dataset with UMAP and HDBSCAN results
+write.xlsx(final_data_with_clusters, file = "S:/CELL/Elec/Analysis/Masterlist-RNA_with_UMAP_HDBSCAN_Clusters_mean.xlsx")
+print("UMAP and HDBSCAN results have been saved with the full dataset.")
+
+
+# Step 1: Checking if the clusters make sense
+# Load necessary libraries
+library(cluster)  # for silhouette analysis
+library(ggplot2)  ## Set the working directory
+
+# Load the results of HDBSCAN and UMAP for plotting
+load("S:/CELL/Elec/Analysis/umap_result.RData")  # UMAP results
+load("S:/CELL/Elec/Analysis/HDBSCAN_result.RData")  # HDBSCAN results
+
+# Extract the UMAP embeddings and HDBSCAN cluster assignments
+umap_embeddings <- umap_result$layout
+hdbscan_clusters <- hdbscan_result$cluster
+
+# Convert HDBSCAN cluster assignments to numeric if not already numeric
+cluster_labels_numeric <- as.numeric(hdbscan_clusters)
+
+# Ensure the UMAP embeddings are in a matrix format
+embeddings_matrix <- as.matrix(umap_embeddings)
+
+# Calculate the distance matrix using the UMAP embeddings
+distance_matrix <- dist(embeddings_matrix)
+
+# Calculate silhouette scores using numeric cluster labels and the distance matrix
+sil_widths <- silhouette(x = cluster_labels_numeric, dist = distance_matrix)
+
+# Extract individual silhouette scores from the silhouette object
+sil_scores <- sil_widths[, 3]
+
+# Create a data frame combining cluster labels with silhouette widths
+sil_df <- data.frame(cluster = cluster_labels_numeric, silhouette_width = sil_scores)
+
+# Calculate average silhouette width per cluster
+avg_sil_width_per_cluster <- aggregate(silhouette_width ~ cluster, sil_df, mean)
+
+
+# Plot the average silhouette width for each cluster
+ggplot(avg_sil_width_per_cluster, aes(x = reorder(cluster, -silhouette_width), y = silhouette_width)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  theme_minimal() +
+  xlab("Cluster") +
+  ylab("Average Silhouette Width") +
+  coord_flip() +
+  ggtitle("Average Silhouette Width per Cluster") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 28), # Center and increase size of the title
+    axis.title = element_text(size = 20), # Increase size of the axis titles
+    axis.line = element_line(size = 1.5, colour = "black"), # Make axis lines thicker and black
+    axis.text = element_text(size = 20) # Increase size of axis labels
+  )
+
+# Combine silhouette score assignments with the final scaled data
+final_data_with_Silhouette_score <- cbind(final_scaled_data, Cluster = factor(hdbscan_clusters), sil_df)
+
+
+# Save the final dataset with UMAP and HDBSCAN results
+write.xlsx(final_data_with_Silhouette_score, file = "S:/CELL/Elec/Analysis/Masterlist-RNA_final_data_with_Silhouette_score.xlsx")
+print("UMAP and HDBSCAN results have been saved with the full dataset.")
+
+#----------------------------------------------------------------------
+# (Optional) Step 6: Principal Curve "Trajectory" on UMAP for Bulk Data
+#----------------------------------------------------------------------
+
+library(princurve)
+
+# Convert the UMAP layout to a matrix
+umap_coords <- as.matrix(umap_result$layout)
+
+# Fit the principal curve
+pc_fit <- principal_curve(umap_coords)
+
+# Extract coordinates and 'lambda' from the fitted curve
+# 'lambda' is the ordering along the principal curve
+curve_order <- order(pc_fit$lambda)
+curve_df <- data.frame(
+  x = pc_fit$s[curve_order, 1],
+  y = pc_fit$s[curve_order, 2]
+)
+
+# Your original UMAP + cluster plot
+umap_plot <- data.frame(
+  UMAP1   = umap_result$layout[,1],
+  UMAP2   = umap_result$layout[,2],
+  Cluster = factor(hdbscan_result$cluster)
+) %>%
+  ggplot(aes(x = UMAP1, y = UMAP2, color = Cluster)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "UMAP Reduction with HDBSCAN Clusters",
+    color = "Cluster",
+    x = "UMAP 1",
+    y = "UMAP 2"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 28),
+    axis.title = element_text(size = 20),
+    axis.line   = element_line(size = 1.5, colour = "black"),
+    axis.text   = element_text(size = 20),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  guides(
+    color = guide_legend(
+      override.aes = list(size = 6)
+    )
+  )
+
+# Add the principal curve line (sorted by 'lambda')
+umap_plot_with_curve <- umap_plot +
+  geom_path(
+    data = curve_df,
+    aes(x = x, y = y),
+    size = 1.2,
+    color = "black",
+    inherit.aes = FALSE
+  )
+
+# Save & display
+ggsave(
+  "S:/CELL/Elec/Analysis/umap_plot_with_principal_curve.png",
+  plot   = umap_plot_with_curve,
+  width  = 10,
+  height = 8
+)
+print(umap_plot_with_curve)
+
