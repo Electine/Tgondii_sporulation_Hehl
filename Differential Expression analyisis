@@ -1,0 +1,215 @@
+###############################################################
+# Differential Expression + Volcano / MA plots
+# One annotated results table (with Category) per contrast
+###############################################################
+
+# 1) Setup ---------------------------------------------------------------------
+setwd("S:/CELL/Elec/Analysis/DEA")
+
+# Libraries
+suppressPackageStartupMessages({
+  library(limma)
+  library(ggplot2)
+  library(EnhancedVolcano)
+})
+
+# (optional) update EnhancedVolcano if too old
+if (packageVersion("EnhancedVolcano") < "1.8.0") {
+  if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+  BiocManager::install("EnhancedVolcano")
+}
+
+# 2) Read expression matrix ----------------------------------------------------
+data_path <- "S:/CELL/Elec/Analysis/normalizedData_with_replicates-RNA.csv"
+data      <- read.csv(data_path, stringsAsFactors = FALSE)
+genes     <- data[, 1:2]               # Gene_ID + Product Description
+expr_data <- data[, -(1:2)]
+colnames(genes) <- c("Gene_ID", "Product Description")
+rownames(expr_data) <- data$Gene_ID
+
+# 3) Sample info ---------------------------------------------------------------
+sample_info <- data.frame(SampleName = colnames(expr_data))
+sample_info$Condition <- sub("\\.1$", "", sample_info$SampleName)
+sample_info$Replicate <- ifelse(grepl("\\.1$", sample_info$SampleName), 2, 1)
+sample_info$Condition <- factor(sample_info$Condition)
+sample_info$Replicate <- factor(sample_info$Replicate)
+
+# 4) Design & contrasts --------------------------------------------------------
+design <- model.matrix(~0 + Condition, data = sample_info)
+colnames(design) <- levels(sample_info$Condition)
+fit <- lmFit(as.matrix(expr_data), design)
+
+stages <- c(
+  "Tachyzoite","Bradyzoite","EES1","EES2","EES3","EES4","EES5",
+  "Unsporulated_Oosyst","Sporulating_Oosyst","Sporulated_Oosyst"
+)
+
+contrast_list <- list()
+for (i in seq_along(stages)[-length(stages)]) {
+  cn <- paste0(stages[i + 1], "_vs_", stages[i])
+  contrast_list[[cn]] <- paste0(stages[i + 1], " - ", stages[i])
+}
+contrast_list[["Sporulated_Oosyst_vs_Tachyzoite"]] <- "Sporulated_Oosyst - Tachyzoite"
+contrast_list[["EES5_vs_EES2"]] <- "EES5 - EES2"
+
+contrast.matrix <- makeContrasts(
+  contrasts = unlist(contrast_list),
+  levels    = design
+)
+colnames(contrast.matrix) <- names(contrast_list)
+fit2 <- eBayes(contrasts.fit(fit, contrast.matrix))
+
+# 5) Annotated genes (stage markers) ------------------------------------------
+annotated_genes <- data.frame(
+  Gene_ID = c(
+    # Tachyzoite
+    "TGME49_233460","TGME49_268850","TGME49_291890","TGME49_208030","TGME49_233480","TGME49_271050",
+    # Bradyzoite
+    "TGME49_259020","TGME49_291040","TGME49_268860","TGME49_280570","TGME49_253330","TGME49_264660",
+    "TGME49_208740","TGME49_252640","TGME49_209755","TGME49_238440",
+    # Merozoite (EES1-EES4)
+    "TGME49_212410","TGME49_237800","TGME49_273980","TGME49_243940","TGME49_277230",
+    # EES5
+    "TGME49_285940","TGME49_233330","TGME49_212240","TGME49_500391","TGME49_316890",
+    # Unsporulated
+    "TGME49_315730",
+    # Sporulating
+    "TGME49_500398",
+    # Sporulated
+    "TGME49_212300","TGME49_250870","TGME49_213280","TGME49_249990","TGME49_203310","TGME49_258550",
+    "TGME49_290700","TGME49_254720","TGME49_308020","TGME49_310790"
+  ),
+  Gene_name = c(
+    # Tachyzoite
+    "SAG1","ENO2","MIC1","MIC4","SRS2","SAG2",
+    # Bradyzoite
+    "BAG1","LDH2","ENO1","SAG4","BPK1","CST1","MCP3","PMA1","MAG2","SRS22A",
+    # Merozoite
+    "GRA11A","GRA11B","GRA80","GRA81","GRA82",
+    # EES5
+    "HAP2","RSPH","β_Tubulin","AO2","HOWP1",
+    # Unsporulated
+    "sporoAMA1",
+    # Sporulating
+    "sporoRON2",
+    # Sporulated
+    "GRA32","DHHC1","SRS25","GRA70","GRA7","SporoSAG",
+    "GRA25","GRA8","SRS57","CST9"
+  ),
+  MarkerStage = c(
+    rep("Tachyzoite", 6),
+    rep("Bradyzoite",10),
+    rep("Merozoite", 5),
+    rep("EES5",       5),
+    "Unsporulated",
+    "Sporulating",
+    rep("Sporulated",10)
+  ),
+  stringsAsFactors = FALSE
+)
+
+# 6) Stage lookup helper -------------------------------------------------------
+stageLookup <- c(
+  Tachyzoite           = "Tachyzoite",
+  Bradyzoite           = "Bradyzoite",
+  EES1                 = "Merozoite",
+  EES2                 = "Merozoite",
+  EES3                 = "Merozoite",
+  EES4                 = "Merozoite",
+  EES5                 = "EES5",
+  Unsporulated_Oosyst  = "Unsporulated",
+  Sporulating_Oosyst   = "Sporulating",
+  Sporulated_Oosyst    = "Sporulated"
+)
+getStages <- function(x) {
+  p <- strsplit(x, "_vs_")[[1]]
+  list(stage2 = p[1], stage1 = p[2])
+}
+
+# 7) Determine global volcano axes --------------------------------------------
+max_logFC <- 0
+max_adjP  <- 0
+for (cn in names(contrast_list)) {
+  tt <- topTable(fit2, coef = cn, number = Inf, adjust.method = "BH")
+  if (nrow(tt) == 0) next
+  max_logFC <- max(max_logFC, max(abs(tt$logFC), na.rm = TRUE))
+  ap <- tt$adj.P.Val ; ap[ap == 0] <- .Machine$double.xmin
+  max_adjP  <- max(max_adjP, max(-log10(ap), na.rm = TRUE))
+}
+max_logFC <- ceiling(max_logFC)
+max_adjP  <- ceiling(max_adjP)
+
+# 8) Per-contrast output -------------------------------------------------------
+for (cn in names(contrast_list)) {
+  res <- topTable(fit2, coef = cn, number = Inf, adjust.method = "BH")
+  cat("\n>>>", cn, " (", nrow(res), "genes)\n")
+  if (nrow(res) == 0) next
+  
+  ## add annotations ----
+  res$Gene_ID <- rownames(res)
+  res$`Product Description` <- genes$`Product Description`[
+    match(res$Gene_ID, genes$Gene_ID)]
+  res$`Product Description`[is.na(res$`Product Description`)] <- ""
+  
+  res <- merge(res, annotated_genes, by = "Gene_ID", all.x = TRUE)
+  res$Gene_name[is.na(res$Gene_name)]       <- ""
+  res$MarkerStage[is.na(res$MarkerStage)]   <- ""
+  
+  ## stage-direction labels (optional) ----
+  st  <- getStages(cn)
+  s2  <- stageLookup[[st$stage2]]
+  s1  <- stageLookup[[st$stage1]]
+  res$label <- ""
+  res$label[(res$MarkerStage == s2 & res$logFC >  0) |
+              (res$MarkerStage == s1 & res$logFC <  0)] <- res$Gene_name[
+                (res$MarkerStage == s2 & res$logFC >  0) |
+                  (res$MarkerStage == s1 & res$logFC <  0)]
+  
+  ## CATEGORY column ----
+  sig  <- res$adj.P.Val < 0.05
+  res$Category <- "notSig"
+  res$Category[sig &  res$logFC  >  2] <- "sigUp"
+  res$Category[sig &  res$logFC  < -2] <- "sigDown"
+  res$Category[sig &  abs(res$logFC) <= 2] <- "sigLowFC"
+  res$Category <- factor(res$Category,
+                         levels = c("sigUp","sigDown","sigLowFC","notSig"))
+  
+  ## sort -- Category → effect/p-value ----
+  res <- res[with(res, order(
+    Category,
+    -abs(logFC) * (Category %in% c("sigUp","sigDown")),
+    adj.P.Val   * (Category %in% c("sigLowFC","notSig"))
+  )), ]
+  
+  ## write CSV ----
+  csv_out <- paste0("DEA_", cn, "_withCategory.csv")
+  write.csv(res, csv_out, row.names = FALSE)
+  cat("    written:", csv_out, "\n")
+  
+  ## volcano ----
+  volc <- EnhancedVolcano(
+    res, lab = res$label,
+    x = "logFC", y = "adj.P.Val",
+    pCutoff = 0.05, FCcutoff = 2,
+    xlim = c(-max_logFC, max_logFC), ylim = c(0, max_adjP),
+    xlab = bquote(~Log[2]~ "fold change"),
+    ylab = bquote(~-Log[10]~ "adjusted p-value"),
+    title = cn, subtitle = NULL,
+    max.overlaps = Inf, drawConnectors = TRUE, widthConnectors = 0.5
+  ) + theme_minimal(base_size = 14) +
+    theme(panel.grid = element_blank(),
+          plot.title = element_text(hjust = 0.5, size = 20),
+          legend.position = "bottom")
+  ggsave(paste0("Volcano_", cn, ".png"), volc, width = 8, height = 6)
+  print(volc)
+  
+  ## MA plot ----
+  readline("   [Enter] for MA plot…")
+  plotMA(fit2, coef = cn, main = paste("MA Plot:", cn),
+         ylim = c(-max_logFC, max_logFC))
+  readline("   [Enter] to continue…")
+}
+
+cat("\nAll contrasts processed — annotated tables & plots saved.\n")
+“Initial upload of R scripts”
