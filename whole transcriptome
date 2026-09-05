@@ -7,7 +7,7 @@ setwd("S:/CELL/Elec/Analysis")
 # Load necessary libraries
 #----------------------------------------------------------------------
 library(umap)
-library(dbscan)  # HDBSCAN is available in this library
+library(dbscan)  
 library(ggplot2)
 library(dplyr)
 library(openxlsx)
@@ -51,12 +51,6 @@ variance_plot <- ggplot(data.frame(Variance = variances), aes(x = Variance)) +
 ggsave("S:/CELL/Elec/Analysis/variance_histogram.png", plot=variance_plot, width=10, height=8)
 # Display the variance plot
 print(variance_plot)
-
-#----------------------------------------------------------------------
-# (Filtering Step Removed)
-# No thresholding or subsetting is performed here.
-#----------------------------------------------------------------------
-
 #----------------------------------------------------------------------
 # Step 3: Scale the data by genes (rows) on the full dataset
 #----------------------------------------------------------------------
@@ -120,12 +114,12 @@ umap_plot <- data.frame(
     axis.title = element_text(size = 20),
     axis.line = element_line(size = 1.5, colour = "black"),
     axis.text = element_text(size = 20),
-    panel.grid.major = element_blank(),   # Remove major grid lines
-    panel.grid.minor = element_blank()    # Remove minor grid lines
+    panel.grid.major = element_blank(),   
+    panel.grid.minor = element_blank()   
   ) +
   guides(
     color = guide_legend(
-      override.aes = list(size = 6)       # Increase legend point size
+      override.aes = list(size = 6)       
     )
   )
 
